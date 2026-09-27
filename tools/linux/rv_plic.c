@@ -11,28 +11,28 @@ rv_res rv_plic_bus(rv_plic *plic, rv_u32 addr, rv_u8 *d, rv_u32 is_store,
   rv_endcvt(d, (rv_u8 *)&data, 4, 0);
   if (addr >= RV_PLIC_SIZE || width != 4)
     return RV_BAD;
-  else if (addr < RV_PLIC_NSRC * 4) /*R Interrupt Source Priority */
+  else if (addr < RV_PLIC_NSRC * 4) /*R 中断源优先级 */
     reg = plic->priority + (addr >> 2), wmask *= !!addr;
   else if (addr >= 0x1000 &&
-           addr < 0x1000 + RV_PLIC_NSRC / 8) /*R Interrupt Pending Bits */
+           addr < 0x1000 + RV_PLIC_NSRC / 8) /*R 中断挂起位 */
     reg = plic->pending + ((addr - 0x1000) >> 2), wmask ^= addr == 0x1000;
   else if (addr >= 0x2000 &&
-           addr < 0x2000 + RV_PLIC_NSRC / 8) /*R Interrupt Enable Bits */
+           addr < 0x2000 + RV_PLIC_NSRC / 8) /*R 中断使能位 */
     reg = plic->enable + ((addr - 0x2000) >> 2), wmask ^= addr == 0x2000;
   else if (addr >> 12 >= 0x200 && (addr >> 12) < 0x200 + RV_PLIC_NCTX &&
-           !(addr & 0xFFF)) /*R Priority Threshold */
+           !(addr & 0xFFF)) /*R 优先级阈值 */
     reg = plic->thresh + ((addr >> 12) - 0x200);
   else if (addr >> 12 >= 0x200 && (addr >> 12) < 0x200 + RV_PLIC_NCTX &&
-           (addr & 0xFFF) == 4) /*R Interrupt Claim Register */ {
+           (addr & 0xFFF) == 4) /*R 中断 claim 寄存器 */ {
     rv_u32 context = (addr >> 12) - 0x200, en_off = context * RV_PLIC_NSRC / 32;
     reg = plic->claim + context;
     if (!is_store && *reg < RV_PLIC_NSRC) {
       if (plic->pending[*reg / 32] & (1U << *reg % 32))
         plic->claiming[*reg / 32 + en_off] |=
-            1U << *reg % 32; /* set claiming bit */
+            1U << *reg % 32; /* 置位 claiming 位 */
     } else if (is_store && data < RV_PLIC_NSRC) {
       plic->claiming[data / 32 + en_off] &=
-          ~(1U << data % 32); /* unset claiming bit */
+          ~(1U << data % 32); /* 清除 claiming 位 */
     }
   }
   if (reg && !is_store)

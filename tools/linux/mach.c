@@ -8,13 +8,13 @@
 #include "rv_uart.h"
 
 #define MACH_RAM_BASE 0x80000000UL
-#define MACH_RAM_SIZE (1024UL * 1024UL * 128UL) /* 128MiB of ram */
-#define MACH_DTB_OFFSET 0x2000000UL             /* dtb is @32MiB */
+#define MACH_RAM_SIZE (1024UL * 1024UL * 128UL) /* 128MiB 内存 */
+#define MACH_DTB_OFFSET 0x2000000UL             /* dtb 位于 32MiB 处 */
 
-#define MACH_PLIC0_BASE 0xC000000UL  /* plic0 base address */
-#define MACH_CLINT0_BASE 0x2000000UL /* clint0 base address */
-#define MACH_UART0_BASE 0x3000000UL  /* uart0 base address */
-#define MACH_UART1_BASE 0x6000000UL  /* uart1 base address */
+#define MACH_PLIC0_BASE 0xC000000UL  /* plic0 基地址 */
+#define MACH_CLINT0_BASE 0x2000000UL /* clint0 基地址 */
+#define MACH_UART0_BASE 0x3000000UL  /* uart0 基地址 */
+#define MACH_UART1_BASE 0x6000000UL  /* uart1 基地址 */
 
 typedef struct mach {
   rv *cpu;
@@ -24,7 +24,7 @@ typedef struct mach {
   rv_uart uart0, uart1;
 } mach;
 
-/* machine general bus access */
+/* 机器通用总线访问 */
 rv_res mach_bus(void *user, rv_u32 addr, rv_u8 *data, rv_u32 store,
                 rv_u32 width) {
   mach *m = (mach *)user;
@@ -47,12 +47,12 @@ rv_res mach_bus(void *user, rv_u32 addr, rv_u8 *data, rv_u32 store,
   }
 }
 
-/* uart0 I/O callback */
+/* uart0 I/O 回调 */
 rv_res uart0_io(void *user, rv_u8 *byte, rv_u32 write) {
   int ch;
-  static int thrott = 0; /* prevent getch() from being called too much */
+  static int thrott = 0; /* 防止 getch() 被调用得过于频繁 */
   (void)user;
-  if (write && *byte != '\r') /* curses bugs out if we echo '\r' */
+  if (write && *byte != '\r') /* 回显 '\r' 会让 curses 出错 */
     echochar(*byte);
   else if (!write && ((thrott = (thrott + 1) & 0xFFF) || (ch = getch()) == ERR))
     return RV_BAD;
@@ -61,14 +61,14 @@ rv_res uart0_io(void *user, rv_u8 *byte, rv_u32 write) {
   return RV_OK;
 }
 
-/* uart1 I/O callback */
+/* uart1 I/O 回调 */
 rv_res uart1_io(void *user, rv_u8 *byte, rv_u32 write) {
   (void)user, (void)byte, (void)write;
-  /* your very own uart, do whatever you want with it! */
-  return RV_BAD; /* stubbed for now */
+  /* 你自己的 uart，想怎么用就怎么用！ */
+  return RV_BAD; /* 暂时留空 */
 }
 
-/* dumb bootrom */
+/* 简易 bootrom */
 void load(const char *path, rv_u8 *buf, rv_u32 max_size) {
   FILE *f = fopen(path, "rb");
   if (!f) {
@@ -90,38 +90,38 @@ int main(int argc, const char *const *argv) {
     exit(EXIT_FAILURE);
   }
 
-  /* initialize machine */
+  /* 初始化机器 */
   memset(&m, 0, sizeof(m));
   m.ram = malloc(MACH_RAM_SIZE);
   m.cpu = &cpu;
   memset(m.ram, 0, MACH_RAM_SIZE);
 
-  /* peripheral setup */
+  /* 外设设置 */
   rv_init(&cpu, &m, &mach_bus);
   rv_plic_init(&m.plic0);
   rv_clint_init(&m.clint0, &cpu);
   rv_uart_init(&m.uart0, NULL, &uart0_io);
   rv_uart_init(&m.uart1, &m, &uart1_io);
 
-  /* load kernel and dtb */
+  /* 加载内核与 dtb */
   load(argv[1], m.ram, MACH_RAM_SIZE);
   load(argv[2], m.ram + MACH_DTB_OFFSET, MACH_RAM_SIZE - MACH_DTB_OFFSET);
 
-  /* try and figure out how many instructions to run */
+  /* 试着算出要执行多少条指令 */
   if (argc == 4) {
     ninst = (size_t)atol(argv[3]);
   }
 
-  /* ncurses setup */
-  initscr();              /* initialize screen */
-  cbreak();               /* don't buffer input chars */
-  noecho();               /* don't echo input chars */
-  scrollok(stdscr, TRUE); /* allow the screen to autoscroll */
-  nodelay(stdscr, TRUE);  /* enable nonblocking input */
+  /* ncurses 设置 */
+  initscr();              /* 初始化屏幕 */
+  cbreak();               /* 不对输入字符做缓冲 */
+  noecho();               /* 不回显输入字符 */
+  scrollok(stdscr, TRUE); /* 允许屏幕自动滚动 */
+  nodelay(stdscr, TRUE);  /* 启用非阻塞输入 */
 
-  /* the bootloader and linux expect the following: */
+  /* bootloader 和 linux 期望如下： */
   cpu.r[10] /* a0 */ = 0;                               /* hartid */
-  cpu.r[11] /* a1 */ = MACH_RAM_BASE + MACH_DTB_OFFSET; /* dtb ptr */
+  cpu.r[11] /* a1 */ = MACH_RAM_BASE + MACH_DTB_OFFSET; /* dtb 指针 */
   do {
     rv_u32 irq = 0;
     if (!(rtc_period = (rtc_period + 1) & 0xFFF))

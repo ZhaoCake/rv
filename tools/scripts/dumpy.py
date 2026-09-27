@@ -1,4 +1,4 @@
-# Read comments in a source file for annotations.
+# 读取源文件中的注释以获取标注。
 from argparse import ArgumentParser, FileType
 import re
 import sys

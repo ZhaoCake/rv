@@ -45,7 +45,7 @@ rv_res rv_uart_bus(rv_uart *uart, rv_u32 addr, rv_u8 *d, rv_u32 is_store,
       data = ((rv_u32)(!uart->rx.size) << 31U) | rv_uart_fifo_get(&uart->rx);
   } else if (addr == 0x08) { /*R txctrl */
     if (is_store)
-      uart->txctrl = data & 0x00070003; /* no nstop supported */
+      uart->txctrl = data & 0x00070003; /* 不支持 nstop */
     else
       data = uart->txctrl;
   } else if (addr == 0x0C) { /*R rxctrl */
@@ -66,7 +66,7 @@ rv_res rv_uart_bus(rv_uart *uart, rv_u32 addr, rv_u8 *d, rv_u32 is_store,
       uart->div = data & 0xFFFF;
     else
       data = uart->div;
-  } else if (addr == 0x1C) { /*R unused */
+  } else if (addr == 0x1C) { /*R 未使用 */
     if (!is_store)
       data = 0;
   } else {

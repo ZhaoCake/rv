@@ -34,7 +34,7 @@ rv_res rv_clint_bus(rv_clint *clint, rv_u32 addr, rv_u8 *d, rv_u32 is_store,
 }
 
 rv_u32 rv_clint_msi(rv_clint *clint, rv_u32 context) {
-  (void)context; /* unused for now, perhaps add multicore support later */
+  (void)context; /* 暂时未使用，也许以后再加多核支持 */
   return clint->mswi & 1;
 }
 

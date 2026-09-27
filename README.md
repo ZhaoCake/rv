@@ -1,31 +1,31 @@
 # rv
 
-RISC-V CPU core written in ANSI C.
+用 ANSI C 编写的 RISC-V CPU 核心。
 
-Features:
+特性：
 
-- `RV32IMAC_Zicsr` implementation with M-mode and S-mode
-- Boots RISCV32 Linux
-- Passes all supported tests in [`riscv-tests`](https://github.com/riscv/riscv-tests)
-- ~800 lines of code
-- Doesn't use any integer types larger than 32 bits, even for multiplication
-- Simple API (two required functions, plus one memory callback function that you provide)
-- No memory allocations
+- 实现了 `RV32IMAC_Zicsr`，支持 M 模式和 S 模式
+- 可以启动 RISCV32 Linux
+- 通过 [`riscv-tests`](https://github.com/riscv/riscv-tests) 中所有受支持的测试
+- 约 800 行代码
+- 不使用任何大于 32 位的整数类型，乘法也是如此
+- 简洁的 API（两个必需函数，外加一个由你提供的内存回调函数）
+- 无内存分配
 
 ## API
 
 ```c
-/* Memory access callback: data is input/output, return RV_BAD on fault. */
+/* 内存访问回调：data 既是输入也是输出，出错时返回 RV_BAD。 */
 typedef rv_res (*rv_bus_cb)(void *user, rv_u32 addr, rv_u8 *data, rv_u32 is_store, rv_u32 width);
 
-/* Initialize CPU. You can call this again on `cpu` to reset it. */
+/* 初始化 CPU。可以对 `cpu` 再次调用以复位。 */
 void rv_init(rv *cpu, void *user, rv_bus_cb bus_cb);
 
-/* Single-step CPU. Returns RV_E* on exception. */
+/* 单步执行 CPU。发生异常时返回 RV_E*。 */
 rv_u32 rv_step(rv *cpu);
 ```
 
-## Usage
+## 用法
 
 ```c
 #include <stdio.h>
@@ -63,28 +63,28 @@ int main(void) {
 }
 ```
 
-See [`tools/example/example.c`](tools/example/example.c).
+参见 [`tools/example/example.c`](tools/example/example.c)。
 
-## Running Linux
+## 运行 Linux
 
-This repository contains a machine emulator that can use `rv` to boot Linux.
-See [`tools/linux/README.md`](tools/linux/README.md).
+本仓库包含一个可以使用 `rv` 启动 Linux 的机器模拟器。
+参见 [`tools/linux/README.md`](tools/linux/README.md)。
 
-## Targeting `rv`
+## 面向 `rv` 编译
 
-Use [riscv-gnu-toolchain](https://github.com/riscv-collab/riscv-gnu-toolchain) with [tools/link.ld](tools/link.ld).
+配合 [tools/link.ld](tools/link.ld) 使用 [riscv-gnu-toolchain](https://github.com/riscv-collab/riscv-gnu-toolchain)。
 
-Suggested GCC commandline:
+建议的 GCC 命令行：
 
 `riscv64-unknown-elf-gcc example.S -nostdlib -nostartfiles -Tlink.ld -march=rv32imac -mabi=ilp32 -o example.o -e _start -g -no-pie`
 
-To dump a binary starting at `0x80000000` that can be directly loaded by `rv` as in the above example:
+要导出一个起始于 `0x80000000`、可被 `rv` 直接加载的二进制文件（如上例所示）：
 
 `riscv64-unknown-elf-objcopy -g -O binary example.o example.bin`
 
-## Instruction List
+## 指令列表
 
-Click an instruction to see its implementation in `rv.c`.
+点击某条指令即可查看它在 `rv.c` 中的实现。
 
 - [`add       `](rv.c#L560)[`addi      `](rv.c#L560)[`amoadd.w  `](rv.c#L519)[`amoand.w  `](rv.c#L531)[`amomax.w  `](rv.c#L535)[`amomaxu.w `](rv.c#L539)[`amomin.w  `](rv.c#L533)[`amominu.w `](rv.c#L537)
 - [`amoor.w   `](rv.c#L529)[`amoswap.w `](rv.c#L521)[`amoxor.w  `](rv.c#L527)[`and       `](rv.c#L577)[`andi      `](rv.c#L577)[`auipc     `](rv.c#L669)[`beq       `](rv.c#L480)[`bge       `](rv.c#L483)
@@ -99,30 +99,30 @@ Click an instruction to see its implementation in `rv.c`.
 - [`slli      `](rv.c#L565)[`slt       `](rv.c#L567)[`slti      `](rv.c#L567)[`sltiu     `](rv.c#L569)[`sltu      `](rv.c#L569)[`sra       `](rv.c#L573)[`srai      `](rv.c#L573)[`sret      `](rv.c#L631)
 - [`srl       `](rv.c#L573)[`srli      `](rv.c#L573)[`sub       `](rv.c#L560)[`sw        `](rv.c#L471)[`wfi       `](rv.c#L648)[`xor       `](rv.c#L571)[`xori      `](rv.c#L571)
 
-## FAQ
+## 常见问题
 
-### Spaghetti code!
+### 代码像意大利面一样乱！
 
-- `rv` was written in a way that takes maximal advantage of RISCV's instruction orthogonality.
-- `rv` also tries to strike a good balance between conciseness and readability.
-- Of course, being able to read this code at all requires intimate prior knowledge of the ISA encoding.
+- `rv` 的编写方式充分利用了 RISC-V 指令的正交性。
+- `rv` 也努力在简洁与可读性之间取得良好平衡。
+- 当然，要读懂这段代码，至少需要对 ISA 编码有深入的先备知识。
 
-### No switch statements!
+### 没有 switch 语句！
 
-- C only allows constant expressions in switch statements. In addition to an abundance of `break` statements using these would result in more bloated code in the author's opinion. As it turns out, you are actually free to reimplement this code with switch statements. See [LICENSE.txt](LICENSE.txt).
+- C 语言只允许在 switch 语句中使用常量表达式。在作者看来，除了大量 `break` 语句之外再用上它们，只会让代码更加臃肿。事实证明，你完全可以改用 switch 语句重新实现这段代码。参见 [LICENSE.txt](LICENSE.txt)。
 
-### Not useful!
+### 没什么用！
 
-- [Ok](https://www.google.com/search?q=happy+smiley+thumbs+up+happy+cool+funny+ok&tbm=isch)
+- [好](https://www.google.com/search?q=happy+smiley+thumbs+up+happy+cool+funny+ok&tbm=isch)
 
-### Slow!
+### 太慢了！
 
-- [Ok](https://www.google.com/search?q=happy+smiley+thumbs+up+happy+cool+funny+ok&tbm=isch)
+- [好](https://www.google.com/search?q=happy+smiley+thumbs+up+happy+cool+funny+ok&tbm=isch)
 
-## Caveats
+## 注意事项
 
-- Written in C89.
-- Not actually written in C89, since it uses external names longer than 6 characters.
-- Doesn't use any integer types larger than 32 bits, even for multiplication, because it's written in C89.
-- Assumes width of integer types in a way that's not completely compliant with C89/99. Fix for this is coming soon, I'm working on a watertight `<stdint.h>` for C89.
-- Written in C89.
+- 采用 C89 编写。
+- 其实并不完全符合 C89，因为它使用了长度超过 6 个字符的外部名称。
+- 不使用任何大于 32 位的整数类型，乘法也是如此，因为它采用 C89 编写。
+- 以不完全符合 C89/99 的方式假设整数类型的宽度。相关修复即将到来，我正在为 C89 打造一个滴水不漏的 `<stdint.h>`。
+- 采用 C89 编写。

@@ -20,16 +20,15 @@ bus_cb(void* user, rv_u32 addr, rv_u8* data, rv_u32 is_store, rv_u32 width)
 /* https://github.com/mnurzia/rv/issues/5 */
 int test_5(void)
 {
-  /* ensure that dividing by zero does not trap the host, even with invalid
-   * encodings */
+  /* 确保除以零不会让宿主机陷入 trap，即使编码是非法的 */
   rv cpu;
   rv_u8 mem[RAM_SIZE];
   rv_u32 prog[5] = {
       0x00500193, /* addi x3, x0, 5 */
       0x0201f0b3, /* remu x1, x3, x1 */
       0x0201e0b3, /* rem x1, x3, x1 */
-      0x42437733, /* invalid */
-      0x3384F333, /* invalid */
+      0x42437733, /* 非法指令 */
+      0x3384F333, /* 非法指令 */
   };
   memcpy((void*)mem, prog, sizeof(prog));
   rv_init(&cpu, mem, &bus_cb);
@@ -38,9 +37,9 @@ int test_5(void)
   assert(cpu.r[1] == 5);
   assert(rv_step(&cpu) == RV_TRAP_NONE);
   assert(cpu.r[1] == 5);
-  assert(rv_step(&cpu) == RV_EILL); /* ensure first invalid instruction traps */
-  cpu.pc = 0x80000010; /* run last instruction */
-  assert(rv_step(&cpu) == RV_EILL); /* ensure it traps too */
+  assert(rv_step(&cpu) == RV_EILL); /* 确保第一条非法指令会 trap */
+  cpu.pc = 0x80000010; /* 执行最后一条指令 */
+  assert(rv_step(&cpu) == RV_EILL); /* 确保它也会 trap */
   return 0;
 }
 
