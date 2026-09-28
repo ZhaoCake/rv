@@ -13,7 +13,6 @@ void rv_init(rv *cpu, void *user, rv_bus_cb bus_cb) {
   cpu->pc = RV_RESET_VEC;
   cpu->csr.misa = (1 << 30)     /* MXL = 1 [XLEN=32] */
                   | rv_ext('A') /* 原子指令 */
-                  | rv_ext('C') /* 压缩指令 */
                   | rv_ext('M') /* 乘除法 */
                   | rv_ext('S') /* 监督者模式 */
                   | rv_ext('U') /* 用户模式 */;
@@ -232,140 +231,6 @@ static rv_u32 rvm(rv_u32 a, rv_u32 b, rv_u32 *hi) {
   return x | (y << 16);                    /*   lo   = (y, x)       */
 }
 
-#define rvc_op(c) rv_bf(c, 1, 0)           /* c. 操作码 */
-#define rvc_f3(c) rv_bf(c, 15, 13)         /* c. funct3 */
-#define rvc_rp(r) ((r) + 8)                /* c. r' 寄存器偏移量 */
-#define rvc_ird(c) rv_bf(c, 11, 7)         /* c. ci 格式 rd/rs1  */
-#define rvc_irpl(c) rvc_rp(rv_bf(c, 4, 2)) /* c. rd'/rs2'（位 4-2） */
-#define rvc_irph(c) rvc_rp(rv_bf(c, 9, 7)) /* c. rd'/rs1'（位 9-7） */
-#define rvc_imm_ciw(c)                     /* c.addi4spn 的 CIW 立即数 */        \
-  (rv_tbf(c, 10, 7, 6) | rv_tbf(c, 12, 11, 4) | rv_tb(c, 6, 2) | rv_tb(c, 5, 3))
-#define rvc_imm_cl(c) /* c.lw/c.sw 的 CL 立即数 */                              \
-  (rv_tb(c, 5, 6) | rv_tbf(c, 12, 10, 3) | rv_tb(c, 6, 2))
-#define rvc_imm_ci(c) /* c.addi/c.li/c.lui 的 CI 立即数 */                      \
-  (rv_signext(rv_tb(c, 12, 5), 5) | rv_bf(c, 6, 2))
-#define rvc_imm_ci_b(c) /* c.addi16sp 的 CI 立即数 */                           \
-  (rv_signext(rv_tb(c, 12, 9), 9) | rv_tbf(c, 4, 3, 7) | rv_tb(c, 5, 6) |      \
-   rv_tb(c, 2, 5) | rv_tb(c, 6, 4))
-#define rvc_imm_ci_c(c) /* c.lwsp 的 CI 立即数 */                               \
-  (rv_tbf(c, 3, 2, 6) | rv_tb(c, 12, 5) | rv_tbf(c, 6, 4, 2))
-#define rvc_imm_cj(c) /* c.jalr/c.j 的 CJ 立即数 */                             \
-  (rv_signext(rv_tb(c, 12, 11), 11) | rv_tb(c, 11, 4) | rv_tbf(c, 10, 9, 8) |  \
-   rv_tb(c, 8, 10) | rv_tb(c, 7, 6) | rv_tb(c, 6, 7) | rv_tbf(c, 5, 3, 1) |    \
-   rv_tb(c, 2, 5))
-#define rvc_imm_cb(c) /* c.beqz/c.bnez 的 CB 立即数 */                          \
-  (rv_signext(rv_tb(c, 12, 8), 8) | rv_tbf(c, 6, 5, 6) | rv_tb(c, 2, 5) |      \
-   rv_tbf(c, 11, 10, 3) | rv_tbf(c, 4, 3, 1))
-#define rvc_imm_css(c) /* c.swsp 的 CSS 立即数 */                               \
-  (rv_tbf(c, 8, 7, 6) | rv_tbf(c, 12, 9, 2))
-
-/* 组装所有非压缩指令类型的宏 */
-#define rv_i_i(op, f3, rd, rs1, imm) /* I 型 */                                \
-  ((imm) << 20 | (rs1) << 15 | (f3) << 12 | (rd) << 7 | (op) << 2 | 3)
-#define rv_i_s(op, f3, rs1, rs2, imm) /* S 型 */                               \
-  (rv_bf(imm, 11, 5) << 25 | (rs2) << 20 | (rs1) << 15 | (f3) << 12 |          \
-   rv_bf(imm, 4, 0) << 7 | (op) << 2 | 3)
-#define rv_i_u(op, rd, imm) /* U 型 */                                         \
-  ((imm) << 12 | (rd) << 7 | (op) << 2 | 3)
-#define rv_i_r(op, f3, rd, rs1, rs2, f7) /* R 型 */                            \
-  ((f7) << 25 | (rs2) << 20 | (rs1) << 15 | (f3) << 12 | (rd) << 7 |           \
-   (op) << 2 | 3)
-#define rv_i_j(op, rd, imm) /* J 型 */                                         \
-  (rv_b(imm, 20) << 31 | rv_bf(imm, 10, 1) << 21 | rv_b(imm, 11) << 20 |       \
-   rv_bf(imm, 19, 12) << 12 | (rd) << 7 | (op) << 2 | 3)
-#define rv_i_b(op, f3, rs1, rs2, imm) /* B 型 */                               \
-  (rv_b(imm, 12) << 31 | rv_bf(imm, 10, 5) << 25 | (rs2) << 20 | (rs1) << 15 | \
-   (f3) << 12 | rv_bf(imm, 4, 1) << 8 | rv_b(imm, 11) << 7 | (op) << 2 | 3)
-
-/* 解压指令 */
-static rv_u32 rvc(rv_u32 c) {
-  if (rvc_op(c) == 0) {
-    if (rvc_f3(c) == 0 && c != 0) { /* c.addi4spn -> addi rd', x2, nzuimm */
-      return rv_i_i(4, 0, rvc_irpl(c), 2, rvc_imm_ciw(c));
-    } else if (c == 0) { /* 非法指令 */
-      return 0;
-    } else if (rvc_f3(c) == 2) { /*I c.lw -> lw rd', offset(rs1') */
-      return rv_i_i(0, 2, rvc_irpl(c), rvc_irph(c), rvc_imm_cl(c));
-    } else if (rvc_f3(c) == 6) { /*I c.sw -> sw rs2', offset(rs1') */
-      return rv_i_s(8, 2, rvc_irph(c), rvc_irpl(c), rvc_imm_cl(c));
-    } else { /* 非法指令 */
-      return 0;
-    }
-  } else if (rvc_op(c) == 1) {
-    if (rvc_f3(c) == 0) { /*I c.addi -> addi rd, rd, nzimm */
-      return rv_i_i(4, 0, rvc_ird(c), rvc_ird(c), rvc_imm_ci(c));
-    } else if (rvc_f3(c) == 1) { /*I c.jal -> jal x1, offset */
-      return rv_i_j(27, 1, rvc_imm_cj(c));
-    } else if (rvc_f3(c) == 2) { /*I c.li -> addi rd, x0, imm */
-      return rv_i_i(4, 0, rvc_ird(c), 0, rvc_imm_ci(c));
-    } else if (rvc_f3(c) == 3) { /* 01/011: LUI/ADDI16SP */
-      if (rvc_ird(c) == 2) {     /*I c.addi16sp -> addi x2, x2, nzimm */
-        return rv_i_i(4, 0, 2, 2, rvc_imm_ci_b(c));
-      } else if (rvc_ird(c) != 0) { /*I c.lui -> lui rd, nzimm */
-        return rv_i_u(13, rvc_ird(c), rvc_imm_ci(c));
-      } else { /* 非法指令 */
-        return 0;
-      }
-    } else if (rvc_f3(c) == 4) {   /* 01/100: MISC-ALU */
-      if (rv_bf(c, 11, 10) == 0) { /*I c.srli -> srli rd', rd', shamt */
-        return rv_i_r(4, 5, rvc_irph(c), rvc_irph(c), rvc_imm_ci(c) & 0x1F, 0);
-      } else if (rv_bf(c, 11, 10) == 1) { /*I c.srai -> srai rd', rd', shamt */
-        return rv_i_r(4, 5, rvc_irph(c), rvc_irph(c), rvc_imm_ci(c) & 0x1F, 32);
-      } else if (rv_bf(c, 11, 10) == 2) { /*I c.andi -> andi rd', rd', imm */
-        return rv_i_i(4, 7, rvc_irph(c), rvc_irph(c), rvc_imm_ci(c));
-      } else if (rv_bf(c, 11, 10) == 3) {
-        if (rv_bf(c, 6, 5) == 0) { /*I c.sub -> sub rd', rd', rs2' */
-          return rv_i_r(12, 0, rvc_irph(c), rvc_irph(c), rvc_irpl(c), 32);
-        } else if (rv_bf(c, 6, 5) == 1) { /*I c.xor -> xor rd', rd', rs2' */
-          return rv_i_r(12, 4, rvc_irph(c), rvc_irph(c), rvc_irpl(c), 0);
-        } else if (rv_bf(c, 6, 5) == 2) { /*I c.or -> or rd', rd', rs2' */
-          return rv_i_r(12, 6, rvc_irph(c), rvc_irph(c), rvc_irpl(c), 0);
-        } else if (rv_bf(c, 6, 5) == 3) { /*I c.and -> and rd', rd', rs2' */
-          return rv_i_r(12, 7, rvc_irph(c), rvc_irph(c), rvc_irpl(c), 0);
-        } else { /* 非法指令 */
-          return 0;
-        }
-      } else { /* 非法指令 */
-        return 0;
-      }
-    } else if (rvc_f3(c) == 5) { /*I c.j -> jal x0, offset */
-      return rv_i_j(27, 0, rvc_imm_cj(c));
-    } else if (rvc_f3(c) == 6) { /*I c.beqz -> beq rs1' x0, offset */
-      return rv_i_b(24, 0, rvc_irph(c), 0, rvc_imm_cb(c));
-    } else if (rvc_f3(c) == 7) { /*I c.bnez -> bne rs1' x0, offset */
-      return rv_i_b(24, 1, rvc_irph(c), 0, rvc_imm_cb(c));
-    } else { /* 非法指令 */
-      return 0;
-    }
-  } else if (rvc_op(c) == 2) {
-    if (rvc_f3(c) == 0) { /*I c.slli -> slli rd, rd, shamt */
-      return rv_i_r(4, 1, rvc_ird(c), rvc_ird(c), rvc_imm_ci(c) & 0x1F, 0);
-    } else if (rvc_f3(c) == 2) { /*I c.lwsp -> lw rd, offset(x2) */
-      return rv_i_i(0, 2, rvc_ird(c), 2, rvc_imm_ci_c(c));
-    } else if (rvc_f3(c) == 4 && !rv_b(c, 12) && !rv_bf(c, 6, 2)) {
-      /*I c.jr -> jalr x0, 0(rs1) */
-      return rv_i_i(25, 0, 0, rvc_ird(c), 0);
-    } else if (rvc_f3(c) == 4 && !rv_b(c, 12)) { /*I c.mv -> add rd, x0, rs2 */
-      return rv_i_r(12, 0, rvc_ird(c), 0, rv_bf(c, 6, 2), 0);
-    } else if (rvc_f3(c) == 4 && rv_b(c, 12) && rvc_ird(c) &&
-               !rv_bf(c, 6, 2)) { /*I c.jalr -> jalr x1, 0(rs1) */
-      return rv_i_i(25, 0, 1, rvc_ird(c), 0);
-    } else if (rvc_f3(c) == 4 && rv_b(c, 12) && !rvc_ird(c) &&
-               !rv_bf(c, 6, 2)) { /*I c.ebreak -> ebreak */
-      return rv_i_i(28, 0, 0, 0, 1);
-    } else if (rvc_f3(c) == 4 && rv_b(c, 12) && rvc_ird(c) &&
-               rv_bf(c, 6, 2)) { /*I c.add -> add rd, rd, rs2 */
-      return rv_i_r(12, 0, rvc_ird(c), rvc_ird(c), rv_bf(c, 6, 2), 0);
-    } else if (rvc_f3(c) == 6) { /*I c.swsp -> sw rs2, offset(x2) */
-      return rv_i_s(8, 2, 2, rv_bf(c, 6, 2), rvc_imm_css(c));
-    } else { /* 非法指令 */
-      return 0;
-    }
-  } else { /* 非法指令 */
-    return 0;
-  }
-}
-
 void rv_endcvt(rv_u8 *in, rv_u8 *out, rv_u32 width, rv_u32 is_store) {
   if (!is_store && width == 1)
     *out = in[0];
@@ -391,13 +256,13 @@ void rv_endcvt(rv_u8 *in, rv_u8 *out, rv_u32 width, rv_u32 is_store) {
  *     调用者（rv_if 取指 / rv_step 的访存分支）
  *        │  发出的是"虚拟地址"
  *        ▼
- *      rv_bus    ← 对齐检查、地址翻译、跨页拆分、字节序转换
+ *      rv_bus    ← 对齐检查、地址翻译、字节序转换
  *        │  交给宿主的已经是"物理地址"
  *        ▼
  *      bus_cb    ← 宿主实现的地址解码器（RAM / UART / PLIC / CLINT ...）
  *
  * 参数：
- *   va     [进/出] 虚拟地址。跨页时会被就地前移，所以必须传指针。
+ *   va     [进]    虚拟地址。no-rvc 分支已删除跨页处理，本函数不再修改它。
  *   data   [进/出] RISC-V 语义下的数据缓冲：
  *                  RV_AR / RV_AX 时是输出（把读到的值写回这里），
  *                  RV_AW 时是输入（从这里取出要写的值）。
@@ -428,8 +293,10 @@ static rv_u32 rv_bus(rv *cpu, rv_u32 *va, rv_u8 *data, rv_u32 width,
 
   /* 步骤 2：对齐检查。这里不翻译地址、也不碰 bus_cb，直接返回错误码。
    * rv_trap_bus 会把它变成 RV_EIALIGN / RV_ELALIGN / RV_ESALIGN（取指/读/写）。
-   * 这一步还有个副作用：它保证地址按 width 对齐，而 4096 能被 1、2、4 整除，
-   * 因此首尾字节必然落在同一页内 —— 这正是下面"跨页分支"永远不成立的原因。 */
+   *
+   * no-rvc 分支补充：这条检查还顺手排除了"跨页访问"。因为能走到下面的地址
+   * 必然是 width 的倍数、而 4096 也是 width（1/2/4）的倍数，所以一次访问的
+   * 首尾字节必然同页 —— 原来那段"跨页拆成两段"的分支已因此删除。 */
   if (*va & (width - 1))
     return RV_BAD_ALIGN;
 
@@ -440,44 +307,13 @@ static rv_u32 rv_bus(rv *cpu, rv_u32 *va, rv_u8 *data, rv_u32 width,
   if ((err = rv_vmm(cpu, *va, &pa, access)))
     return err; /* 缺页或访问异常 */
 
-  /* 步骤 4：跨页拆分。
-   * 判断方法：((pa + width - 1) ^ pa) 取的是"首地址与末地址不同的那些位"，
-   * 再 & ~0xFFF 看这些差异是否落在页号（高 20 位）上；若是，说明这次访问
-   * 跨越了 4KB 边界，需要拆成两段分别访问。
-   *
-   * 注意（重要）：由于步骤 2 已保证地址按 width 对齐、而 4096 是 width 的倍数，
-   * 首字节与末字节必然同页 —— 这个分支实际上永远不会进入，属于预留代码。
-   *
-   * 而且它即便被进入也是错的：下面只对 width / va / data 做了前移，偏偏没有
-   * 对 ledata 偏移，也没有在段间把数据落回 data。后果是
-   *   load ：第一段读进 ledata 后无处落脚，被第二段覆盖 -> 页 A 的字节丢失；
-   *   store：第二段的源又从头取一遍 -> 页 B 被写成页 A 的字节。
-   * 以 lw 0x80000FFE 为例（页 A 尾部 = {11,22}、页 B 头部 = {33,34}）：
-   * 正确结果应为 34332211，按当前写法只会得到 34330000。
-   * 想让它正确，必须同时做到三件事：
-   *   ① 第二段访问使用 ledata + w0（否则 store 写重复）；
-   *   ② 段间不要前移 data，让拼好的数据落在缓冲开头；
-   *   ③ 收尾的 rv_endcvt 使用"原始的" data 与 width（否则 load 只搬回第二段）。 */
-  if (((pa + width - 1) ^ pa) & ~0xFFFU) /* 跨越页边界 */ {
-    rv_u32 w0 /* 从第一页加载这么多字节 */ = 0x1000 - (*va & 0xFFF);
-    /* 第一段：访问第一页剩下的 w0 个字节 */
-    if ((err = cpu->bus_cb(cpu->user, pa, ledata, access == RV_AW, w0)))
-      return err;
-    /* 三个量一起前移到第二页开头：剩余宽度、虚拟地址、数据缓冲。
-     * 注意 width 递减后，步骤 6 的 rv_endcvt 就只会写回第二段的数据。 */
-    width -= w0, *va += w0, data += w0;
-    /* 换页了，物理地址必须基于新虚拟地址重新翻译一次 */
-    if ((err = rv_vmm(cpu, *va, &pa, RV_AW)))
-      return err;
-  }
-
-  /* 步骤 5：真正的总线访问 —— 全函数唯一把请求交给宿主的地方。
+  /* 步骤 4：真正的总线访问 —— 全函数唯一把请求交给宿主的地方。
    * 只有 access == RV_AW 时才置 is_store，所以取指（RV_AX）和读（RV_AR）
    * 在 bus_cb 看来都是"读"。返回非 0 时原样向上传递（见步骤 2 的说明）。 */
   if ((err = cpu->bus_cb(cpu->user, pa, ledata, access == RV_AW, width)))
     return err;
 
-  /* 步骤 6：把 bus_cb 填好的字节序列重新组装成 rv 侧的整数，写回 data。
+  /* 步骤 5：把 bus_cb 填好的字节序列重新组装成 rv 侧的整数，写回 data。
    * is_store 传 0，表示方向是 "宿主侧 -> rv 侧"。 */
   rv_endcvt(ledata, data, width, 0);
   return 0; /* 等价于 RV_OK */
@@ -485,21 +321,15 @@ static rv_u32 rv_bus(rv *cpu, rv_u32 *va, rv_u8 *data, rv_u32 width,
 
 /* 取指 */
 static rv_u32 rv_if(rv *cpu, rv_u32 *i, rv_u32 *tval) {
-  rv_u32 err, page = (cpu->pc ^ (cpu->pc + 3)) & ~0xFFFU, pc = cpu->pc;
-  if (cpu->pc & 2 || page) { /* 分两次 2 字节完成取指 */
-    rv_u32 ia /* 指令前半部分 */ = 0, ib /* 后半部分 */ = 0;
-    if ((err = rv_bus(cpu, &pc, (rv_u8 *)&ia, 2, RV_AX))) /* 取第 1 半 */
-      goto error;
-    if (rv_isz(ia) == 4 && (pc += 2, 1) && /* 若指令宽 4 字节 */
-        (err = rv_bus(cpu, &pc, (rv_u8 *)&ib, 2, RV_AX))) /* 取第 2 半 */
-      goto error; /* 上面的 pc += 2 是为了让 {page}fault trap 的地址准确 */
-    *i = (rv_u32)ia | (rv_u32)ib << 16U;
-  } else if ((err = rv_bus(cpu, &pc, (rv_u8 *)i, 4, RV_AX))) /* 4 字节取指 */
+  rv_u32 err, pc = cpu->pc;
+  /* no-rvc 分支：rv_step 已保证 pc 四字节对齐，而四字节对齐的访问不可能跨页，
+   * 所以原来“分两次 2 字节取指”的分支（连同 page 变量）整体删除。 */
+  if ((err = rv_bus(cpu, &pc, (rv_u8 *)i, 4, RV_AX))) /* 4 字节取指 */
     goto error;
   cpu->next_pc = cpu->pc + rv_isz(*i);
   *tval = *i; /* 对非法指令 trap 而言，tval 是原始指令 */
-  if (rv_isz(*i) < 4)
-    *i = rvc(*i & 0xFFFF);
+  /* no-rvc 分支：不再解压压缩指令。若取到的是 16 位指令，rv_isz(*i) 会返回 2，
+   * 由 rv_step 开头的长度检查判为非法指令（RV_EILL）。 */
   return RV_OK;
 error:
   *tval = pc; /* 对指令 {page}fault trap 而言，tval 是 pc */
@@ -521,9 +351,16 @@ static rv_u32 rv_service(rv *cpu) {
 
 /* 单步执行 */
 rv_u32 rv_step(rv *cpu) {
-  rv_u32 i, tval, err = rv_if(cpu, &i, &tval); /* 取指令到 i */
+  rv_u32 i, tval, err;
   if (!++cpu->csr.cycle)
     cpu->csr.cycleh++; /* 带进位地累加到 cycle、cycleh */
+  /* no-rvc 分支新增：没有 C 扩展时指令必然 32 位，pc 必须四字节对齐。
+   * 规范把这种情况定义为 instruction-address-misaligned（cause 0），
+   * mtval 记录出错的地址。jalr 只清 bit 0，因此跳到 0x...002 会在
+   * 这里被拦下，而不是被 rv_if 悄悄当成“2 字节对齐的指令”执行。 */
+  if (cpu->pc & 3)
+    return rv_trap(cpu, RV_EIALIGN, cpu->pc);
+  err = rv_if(cpu, &i, &tval); /* 取指令到 i */
   if (err)
     return rv_trap_bus(cpu, err, tval, RV_AX); /* 取指错误 */
   if (rv_isz(i) != 4)
