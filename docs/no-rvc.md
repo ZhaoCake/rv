@@ -206,7 +206,8 @@ pc = 0x80000006（2 字节对齐）
 
 ## 6. 影响与限制
 
-- **Linux 与 OpenSBI 无法运行**。二者都按 `rv32imac` 编译，镜像里全是 C 指令。`tools/linux/extern/configs/rv_defconfig` 里有 `BR2_RISCV_ISA_RVC=y` 和 `PLATFORM_RISCV_ISA=rv32imaczicsr_zifencei`，要重建才能配合本分支（内核构建是小时级的）。
+- **现成的 Linux 镜像跑不了**（注意：这不等于"Linux 跑不了"）。本仓库默认构建出的镜像按 `rv32imac` 编译，里面全是 C 指令，直接用本分支运行会在用户空间崩掉。相关配置在 `tools/linux/extern/configs/rv_defconfig`：`BR2_RISCV_ISA_RVC=y`、`PLATFORM_RISCV_ISA=rv32imaczicsr_zifencei`。
+- **但 C 扩展并不是 Linux 的必要条件**：内核（`CONFIG_RISCV_ISA_C`）、OpenSBI（`PLATFORM_RISCV_ISA`）、buildroot（`BR2_RISCV_ISA_RVC`）三处开关全都可以关。真正的障碍在工具链的 multilib——详见 [`no-rvc-toolchain.md`](no-rvc-toolchain.md)。
 - **riscv-tests**：`rv32ui/rv32mi/rv32si/rv32um/rv32ua`（无 C 版本）理论上应全过，`rv32uc`（压缩指令）应全挂。跑之前记得删掉 `tools/test/Makefile` 里这一行，否则 C 测试向量会被拉进来集体失败：
 
   ```make

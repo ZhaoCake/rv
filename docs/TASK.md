@@ -104,7 +104,7 @@
 - **目标**：理解 buildroot 配置里的每个开关与「能跑起来」的因果关系。
 - **代码坐标**：`rv_defconfig`、`tools/linux/extern/Kconfig`。
 - **突破点**：`BR2_RISCV_32 + USE_MMU + ILP32` 决定了内核是 RV32；`INITRAMFS` 意味着没有磁盘、根文件系统打包进内核镜像；`CONFIG_ARCH_RV32I`、`CONFIG_RISCV_ISA_C`、`CONFIG_SIFIVE_PLIC`、`CONFIG_SERIAL_SIFIVE` 每一条都对应模拟器里的一段实现。
-- **通过标准**：能逐条回答「关掉这个 CONFIG 会怎样」；能说出为什么 RV32 内核必须要有 MMU 与 C 扩展。
+- **通过标准**：能逐条回答「关掉这个 CONFIG 会怎样」；能说清哪些特性是硬需求（MMU、Zicsr、Zifencei、A 扩展、S 模式），哪些只是优化（C 扩展，实践中还有 M 扩展）。
 
 ## todoO 端到端时序：把整条链路串成一条时间线
 
