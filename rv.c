@@ -383,28 +383,104 @@ void rv_endcvt(rv_u8 *in, rv_u8 *out, rv_u32 width, rv_u32 is_store) {
     out[2] = *(rv_u32 *)in >> 16 & 0xFF, out[3] = *(rv_u32 *)in >> 24 & 0xFF;
 }
 
-/* 执行一次总线访问。access == RV_AW 表示存储数据。 */
+/* rv_bus —— 所有"需要地址翻译"的内存访问的唯一入口。
+ *
+ * 取指、load、store、AMO 全都汇聚到这里。它和 bus_cb 的分工是理解
+ * 整个 CPU 的关键：
+ *
+ *     调用者（rv_if 取指 / rv_step 的访存分支）
+ *        │  发出的是"虚拟地址"
+ *        ▼
+ *      rv_bus    ← 对齐检查、地址翻译、跨页拆分、字节序转换
+ *        │  交给宿主的已经是"物理地址"
+ *        ▼
+ *      bus_cb    ← 宿主实现的地址解码器（RAM / UART / PLIC / CLINT ...）
+ *
+ * 参数：
+ *   va     [进/出] 虚拟地址。跨页时会被就地前移，所以必须传指针。
+ *   data   [进/出] RISC-V 语义下的数据缓冲：
+ *                  RV_AR / RV_AX 时是输出（把读到的值写回这里），
+ *                  RV_AW 时是输入（从这里取出要写的值）。
+ *   width  [进]    访问宽度，调用者保证只能是 1、2、4。
+ *   access [进]    RV_AR = 读，RV_AW = 写，RV_AX = 取指（执行访问）。
+ *
+ * 返回值：RV_OK(0) 表示成功；否则是 RV_BAD / RV_BAD_ALIGN / RV_PAGEFAULT，
+ *         由调用者交给 rv_trap_bus 换算成 load / store / instruction 三类异常。
+ *
+ * 两条不可动摇的约定：
+ *   1. bus_cb 只认物理地址。所以 rv_vmm 遍历页表时必须直接调用 cpu->bus_cb，
+ *      绝不能再走 rv_bus —— 否则就成了"用翻译器去翻译翻译器自己"，会无限
+ *      递归直到栈溢出。（rv_vmm 里那一行 cpu->bus_cb 就是递归的终止点。）
+ *   2. bus_cb 交换的是"字节流"（rv_u8 数组）而不是整数，因为宿主可能是
+ *      大端机。两侧各做一次 rv_endcvt 完成小端 <-> 宿主字节序的换算；
+ *      在小端宿主上这两次转换互为逆运算，等于什么都没做。
+ */
 static rv_u32 rv_bus(rv *cpu, rv_u32 *va, rv_u8 *data, rv_u32 width,
                      rv_access access) {
-  rv_u32 err, pa /* 物理地址 */;
-  rv_u8 ledata[4];
+  rv_u32 err, pa /* 翻译后的物理地址，由下面的 rv_vmm 填写 */;
+  rv_u8 ledata[4]; /* 与 bus_cb 交换数据用的临时缓冲，最多 4 字节 */
+
+  /* 步骤 1：把 rv 侧的数据摊平成"宿主表示"的字节序列，装进 ledata。
+   * is_store 传 1，表示方向是 "rv 侧 -> 宿主侧"。
+   * 先转换的好处是：后面无论要分几次搬运，交给 bus_cb 的都只是 ledata
+   * 里的字节，rv 侧的 data 不必反复参与。 */
   rv_endcvt(data, ledata, width, 1);
+
+  /* 步骤 2：对齐检查。这里不翻译地址、也不碰 bus_cb，直接返回错误码。
+   * rv_trap_bus 会把它变成 RV_EIALIGN / RV_ELALIGN / RV_ESALIGN（取指/读/写）。
+   * 这一步还有个副作用：它保证地址按 width 对齐，而 4096 能被 1、2、4 整除，
+   * 因此首尾字节必然落在同一页内 —— 这正是下面"跨页分支"永远不成立的原因。 */
   if (*va & (width - 1))
     return RV_BAD_ALIGN;
+
+  /* 步骤 3：虚拟地址 -> 物理地址。
+   * rv_vmm 内部在 TLB 未命中时会去读页表，那条路径走的是 cpu->bus_cb
+   * 而不是本函数（理由见函数头第 1 条约定）。
+   * 失败时 err 可能是 RV_BAD（访问异常）或 RV_PAGEFAULT（缺页）。 */
   if ((err = rv_vmm(cpu, *va, &pa, access)))
     return err; /* 缺页或访问异常 */
+
+  /* 步骤 4：跨页拆分。
+   * 判断方法：((pa + width - 1) ^ pa) 取的是"首地址与末地址不同的那些位"，
+   * 再 & ~0xFFF 看这些差异是否落在页号（高 20 位）上；若是，说明这次访问
+   * 跨越了 4KB 边界，需要拆成两段分别访问。
+   *
+   * 注意（重要）：由于步骤 2 已保证地址按 width 对齐、而 4096 是 width 的倍数，
+   * 首字节与末字节必然同页 —— 这个分支实际上永远不会进入，属于预留代码。
+   *
+   * 而且它即便被进入也是错的：下面只对 width / va / data 做了前移，偏偏没有
+   * 对 ledata 偏移，也没有在段间把数据落回 data。后果是
+   *   load ：第一段读进 ledata 后无处落脚，被第二段覆盖 -> 页 A 的字节丢失；
+   *   store：第二段的源又从头取一遍 -> 页 B 被写成页 A 的字节。
+   * 以 lw 0x80000FFE 为例（页 A 尾部 = {11,22}、页 B 头部 = {33,34}）：
+   * 正确结果应为 34332211，按当前写法只会得到 34330000。
+   * 想让它正确，必须同时做到三件事：
+   *   ① 第二段访问使用 ledata + w0（否则 store 写重复）；
+   *   ② 段间不要前移 data，让拼好的数据落在缓冲开头；
+   *   ③ 收尾的 rv_endcvt 使用"原始的" data 与 width（否则 load 只搬回第二段）。 */
   if (((pa + width - 1) ^ pa) & ~0xFFFU) /* 跨越页边界 */ {
     rv_u32 w0 /* 从第一页加载这么多字节 */ = 0x1000 - (*va & 0xFFF);
+    /* 第一段：访问第一页剩下的 w0 个字节 */
     if ((err = cpu->bus_cb(cpu->user, pa, ledata, access == RV_AW, w0)))
       return err;
+    /* 三个量一起前移到第二页开头：剩余宽度、虚拟地址、数据缓冲。
+     * 注意 width 递减后，步骤 6 的 rv_endcvt 就只会写回第二段的数据。 */
     width -= w0, *va += w0, data += w0;
+    /* 换页了，物理地址必须基于新虚拟地址重新翻译一次 */
     if ((err = rv_vmm(cpu, *va, &pa, RV_AW)))
       return err;
   }
+
+  /* 步骤 5：真正的总线访问 —— 全函数唯一把请求交给宿主的地方。
+   * 只有 access == RV_AW 时才置 is_store，所以取指（RV_AX）和读（RV_AR）
+   * 在 bus_cb 看来都是"读"。返回非 0 时原样向上传递（见步骤 2 的说明）。 */
   if ((err = cpu->bus_cb(cpu->user, pa, ledata, access == RV_AW, width)))
     return err;
+
+  /* 步骤 6：把 bus_cb 填好的字节序列重新组装成 rv 侧的整数，写回 data。
+   * is_store 传 0，表示方向是 "宿主侧 -> rv 侧"。 */
   rv_endcvt(ledata, data, width, 0);
-  return 0;
+  return 0; /* 等价于 RV_OK */
 }
 
 /* 取指 */
