@@ -13,7 +13,6 @@ void rv_init(rv *cpu, void *user, rv_bus_cb bus_cb) {
   cpu->pc = RV_RESET_VEC;
   cpu->csr.misa = (1 << 30)     /* MXL = 1 [XLEN=32] */
                   | rv_ext('A') /* 原子指令 */
-                  | rv_ext('M') /* 乘除法 */
                   | rv_ext('S') /* 监督者模式 */
                   | rv_ext('U') /* 用户模式 */;
   cpu->priv = RV_PMACH;
@@ -195,40 +194,6 @@ static rv_u32 rv_vmm(rv *cpu, rv_u32 va, rv_u32 *pa, rv_access access) {
     *pa = rv_tbf(pte, 31, 10 + 10 * i, 12 + 10 * i) | rv_bf(va, 11 + 10 * i, 0);
   }
   return RV_OK;
-}
-
-#define rvm_lo(w) ((w) & (rv_u32)0xFFFFU) /* 32 位字的低 16 位 */
-#define rvm_hi(w) ((w) >> 16)             /* 32 位字的高 16 位 */
-
-/* 16 位加法 */
-static rv_u32 rvm_ahh(rv_u32 a, rv_u32 b, rv_u32 cin, rv_u32 *cout) {
-  rv_u32 sum = a + b + cin /* cin 必须小于 2。 */;
-  *cout = rvm_hi(sum);
-  return rvm_lo(sum);
-}
-
-/* 16 位乘法 */
-static rv_u32 rvm_mhh(rv_u32 a, rv_u32 b, rv_u32 *cout) {
-  rv_u32 prod = a * b;
-  *cout = rvm_hi(prod);
-  return rvm_lo(prod);
-}
-
-/* 32 x 32 -> 64 位乘法 */
-static rv_u32 rvm(rv_u32 a, rv_u32 b, rv_u32 *hi) {
-  rv_u32 al = rvm_lo(a), ah = rvm_hi(a), bl = rvm_lo(b), bh = rvm_hi(b);
-  rv_u32 qh, ql = rvm_mhh(al, bl, &qh);    /* qh, ql = al * bl      */
-  rv_u32 rh, rl = rvm_mhh(al, bh, &rh);    /* rh, rl = al * bh      */
-  rv_u32 sh, sl = rvm_mhh(ah, bl, &sh);    /* sh, sl = ah * bl      */
-  rv_u32 th, tl = rvm_mhh(ah, bh, &th);    /* th, tl = ah * bh      */
-  rv_u32 mc, m = rvm_ahh(rl, sl, 0, &mc);  /*  m, nc = rl + sl      */
-  rv_u32 nc, n = rvm_ahh(rh, sh, mc, &nc); /*  n, nc = rh + sh + nc */
-  rv_u32 x = ql;                           /*  x, 0  = ql           */
-  rv_u32 yc, y = rvm_ahh(m, qh, 0, &yc);   /*  y, yc = qh + m       */
-  rv_u32 zc, z = rvm_ahh(n, tl, yc, &zc);  /*  z, zc = tl + n  + yc */
-  rv_u32 wc, w = rvm_ahh(th, nc, zc, &wc); /*  w, 0  = th + nc + zc */
-  *hi = z | (w << 16);                     /*   hi   = (w, z)       */
-  return x | (y << 16);                    /*   lo   = (y, x)       */
 }
 
 void rv_endcvt(rv_u8 *in, rv_u8 *out, rv_u32 width, rv_u32 is_store) {
@@ -489,27 +454,6 @@ rv_u32 rv_step(rv *cpu) {
           y = a | b;
         else /*I and, andi */
           y = a & b;
-      } else if (rv_ioph(i) == 1 && rv_if7(i) == 1) {
-        rv_u32 as /* sgn(a) */ = 0, bs /* sgn(b) */ = 0, ylo, yhi /* 结果 */;
-        if (rv_if3(i) < 4) {              /*I mul, mulh, mulhsu, mulhu */
-          if (rv_if3(i) < 3 && rv_sgn(a)) /* 当 f3 属于 {0, 1, 2} 时 a 为有符号 */
-            a = ~a + 1, as = 1;           /* 二进制补码 */
-          if (rv_if3(i) < 2 && rv_sgn(b)) /* 当 f3 属于 {0, 1} 时 b 为有符号 */
-            b = ~b + 1, bs = 1;           /* 二进制补码 */
-          ylo = rvm(a, b, &yhi);          /* 执行乘法 */
-          if (as != bs) /* 若结果 < 0，则对输出值取反 */
-            ylo = ~ylo + 1, yhi = ~yhi + !ylo; /* 二进制补码 */
-          y = rv_if3(i) ? yhi : ylo; /* 若是 mulh 则返回高字，否则返回低字 */
-        } else {
-          if (rv_if3(i) == 4) /*I div */
-            y = b ? (rv_u32)((rv_s32)a / (rv_s32)b) : (rv_u32)(-1);
-          else if (rv_if3(i) == 5) /*I divu */
-            y = b ? (a / b) : (rv_u32)(-1);
-          else if (rv_if3(i) == 6) /*I rem */
-            y = b ? (rv_u32)((rv_s32)a % (rv_s32)b) : a;
-          else  /*I remu */
-            y = b ? a % b : a;
-        } /* 这一切都是因为我们没有 64 位。值得吗？大概不值 B) */
       } else {
         return rv_trap(cpu, RV_EILL, tval);
       }
