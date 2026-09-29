@@ -14,9 +14,8 @@ vectors:
 	cp $(RISCV_TESTS)/isa/rv32ui-p-* vectors
 	cp $(RISCV_TESTS)/isa/rv32si-p-* vectors
 	cp $(RISCV_TESTS)/isa/rv32mi-p-* vectors
-	cp $(RISCV_TESTS)/isa/rv32uc-p-* vectors
-	cp $(RISCV_TESTS)/isa/rv32um-p-* vectors
 	cp $(RISCV_TESTS)/isa/rv32ua-p-* vectors
+	# rv32uc（C 扩展）与 rv32um（M 扩展）的向量已移除：本核心不再实现这两个扩展
 	rm -rf vectors/rv32mi-p-breakpoint # 不支持断点
 	rm -rf vectors/rv32ui-p-ma_data    # 不支持非对齐加载/存储
 	rm -rf vectors/*.dump

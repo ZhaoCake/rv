@@ -4,11 +4,11 @@
 
 特性：
 
-- 实现了 `RV32IMAC_Zicsr`，支持 M 模式和 S 模式
-- 可以启动 RISCV32 Linux
+- 实现了 `RV32IA_Zicsr_Zifencei`（C 扩展与 M 扩展均已移除），支持 M 模式和 S 模式
+- 可以启动 RISCV32 Linux——但需要按无 C / 无 M 重新构建的镜像，见 [`docs/no-rvc.md`](docs/no-rvc.md)
 - 通过 [`riscv-tests`](https://github.com/riscv/riscv-tests) 中所有受支持的测试
-- 约 800 行代码
-- 不使用任何大于 32 位的整数类型，乘法也是如此
+- 约 540 行代码
+- 不使用任何大于 32 位的整数类型
 - 简洁的 API（两个必需函数，外加一个由你提供的内存回调函数）
 - 无内存分配
 
@@ -76,7 +76,7 @@ int main(void) {
 
 建议的 GCC 命令行：
 
-`riscv64-unknown-elf-gcc example.S -nostdlib -nostartfiles -Tlink.ld -march=rv32imac -mabi=ilp32 -o example.o -e _start -g -no-pie`
+`riscv64-unknown-elf-gcc example.S -nostdlib -nostartfiles -Tlink.ld -march=rv32ia_zicsr_zifencei -mabi=ilp32 -o example.o -e _start -g -no-pie`
 
 要导出一个起始于 `0x80000000`、可被 `rv` 直接加载的二进制文件（如上例所示）：
 
